@@ -14,7 +14,10 @@ export const PENALTY_LADDER = [
 // Per-turn display always uses the real units above.
 export const SHOT_IN_SIPS = 3
 
-export const QUESTIONS_PER_PLAYER = 4
+// Question N within a turn is always dealt from tier N — index-matched to
+// PENALTY_LADDER so the questions get harder exactly as the stakes rise.
+export const DIFFICULTY_ORDER = ['easy', 'medium', 'hard', 'expert']
+export const QUESTIONS_PER_PLAYER = DIFFICULTY_ORDER.length
 export const TIME_LIMIT_SECONDS = 15
 export const REVEAL_PAUSE_MS = 1500
 
@@ -33,24 +36,30 @@ export function penaltyToSips(penalty) {
 
 export function dealGame(room) {
   room.turnOrder = shuffle(room.players.map((p) => p.id))
+  const needed = room.turnOrder.length
 
-  let pool = shuffle(QUESTIONS.map((q) => q.id))
-  const needed = room.turnOrder.length * QUESTIONS_PER_PLAYER
-  if (needed > pool.length) {
-    // Not enough unique questions for this many players — reshuffle and
-    // allow wraparound reuse rather than crash. Logged, not silent.
-    console.warn(
-      `[game] Only ${pool.length} questions for ${room.turnOrder.length} players (need ${needed}); reusing questions.`
-    )
-    while (pool.length < needed) {
-      pool = pool.concat(shuffle(QUESTIONS.map((q) => q.id)))
+  // One shuffled deck per difficulty tier, drawn from independently so every
+  // player's question N always comes from tier N (no cross-tier repeats possible).
+  const poolsByTier = {}
+  for (const tier of DIFFICULTY_ORDER) {
+    let pool = shuffle(QUESTIONS.filter((q) => q.difficulty === tier).map((q) => q.id))
+    if (pool.length < needed) {
+      // Not enough unique questions in this tier for this many players —
+      // reshuffle and allow wraparound reuse rather than crash. Logged, not silent.
+      console.warn(
+        `[game] Only ${pool.length} '${tier}' questions for ${needed} players; reusing questions.`
+      )
+      const base = pool
+      while (pool.length < needed) {
+        pool = pool.concat(shuffle(base))
+      }
     }
+    poolsByTier[tier] = pool
   }
 
-  room.questionDeck = pool
   room.assignedQuestions = {}
   for (const playerId of room.turnOrder) {
-    room.assignedQuestions[playerId] = room.questionDeck.splice(0, QUESTIONS_PER_PLAYER)
+    room.assignedQuestions[playerId] = DIFFICULTY_ORDER.map((tier) => poolsByTier[tier].splice(0, 1)[0])
   }
 
   room.currentTurnIndex = 0

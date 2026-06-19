@@ -34,7 +34,6 @@ function createRoom() {
     turnOrder: [],
     currentTurnIndex: 0,
     currentQuestionIndex: 0,
-    questionDeck: [],
     assignedQuestions: {},
     currentQuestionTimer: null,
   }

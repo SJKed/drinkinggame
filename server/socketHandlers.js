@@ -242,7 +242,6 @@ export function registerSocketHandlers(io) {
       room.turnOrder = []
       room.currentTurnIndex = 0
       room.currentQuestionIndex = 0
-      room.questionDeck = []
       room.assignedQuestions = {}
       clearQuestionTimer(room)
       for (const p of room.players) p.drinksTotal = 0
