@@ -12,7 +12,7 @@ export default function JoinForm({ onJoin, errorMessage }) {
 
   return (
     <div className="player-screen player-join">
-      <h1 className="join-title">🍻 Drink or Be Drunk</h1>
+      <h1 className="join-title">🍻 Big Sippa'</h1>
       <form className="join-form" onSubmit={submit}>
         <input
           className="join-input"
