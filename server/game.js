@@ -34,32 +34,78 @@ export function penaltyToSips(penalty) {
   return penalty.unit === 'shot' ? penalty.amount * SHOT_IN_SIPS : penalty.amount
 }
 
+// Spotify-style "don't repeat recently played" memory: a per-tier queue of
+// question ids dealt across ALL rooms/games on this server process (not
+// per-room — the goal is to stop the same questions resurfacing across
+// back-to-back games, same as a shuffle that won't replay a recent track).
+// Capped at half of each tier's size so there's always a majority of fresh
+// questions to draw from, and it ages out automatically as new ones are added.
+const RECENT_HISTORY_RATIO = 0.5
+const recentlyUsedByTier = Object.fromEntries(DIFFICULTY_ORDER.map((tier) => [tier, []]))
+
+function markRecentlyUsed(tier, ids) {
+  const queue = recentlyUsedByTier[tier]
+  queue.push(...ids)
+  const tierSize = QUESTIONS.filter((q) => q.difficulty === tier).length
+  const maxHistory = Math.floor(tierSize * RECENT_HISTORY_RATIO)
+  while (queue.length > maxHistory) queue.shift()
+}
+
+function buildTierDeck(tier, needed) {
+  const allIds = QUESTIONS.filter((q) => q.difficulty === tier).map((q) => q.id)
+  const recentSet = new Set(recentlyUsedByTier[tier])
+  const fresh = allIds.filter((id) => !recentSet.has(id))
+
+  let deck = fresh
+  if (fresh.length < needed) {
+    // Not enough never-recently-used questions for this many players — top
+    // up with the least-recently-used ones first (oldest in the queue = safest to repeat).
+    const seen = new Set(fresh)
+    const oldestFirst = recentlyUsedByTier[tier].filter((id) => !seen.has(id))
+    for (const id of oldestFirst) {
+      if (deck.length >= needed) break
+      if (!seen.has(id)) {
+        deck.push(id)
+        seen.add(id)
+      }
+    }
+  }
+
+  deck = shuffle(deck)
+  if (deck.length < needed) {
+    // Tier genuinely doesn't have enough unique questions for this many
+    // players at all — reshuffle and allow wraparound reuse rather than crash.
+    console.warn(`[game] Only ${deck.length} '${tier}' questions available for ${needed} players; reusing questions.`)
+    const base = deck.length ? deck : shuffle(allIds)
+    while (deck.length < needed) deck = deck.concat(shuffle(base))
+  }
+  return deck
+}
+
 export function dealGame(room) {
   room.turnOrder = shuffle(room.players.map((p) => p.id))
   const needed = room.turnOrder.length
 
-  // One shuffled deck per difficulty tier, drawn from independently so every
-  // player's question N always comes from tier N (no cross-tier repeats possible).
+  // One deck per difficulty tier, biased away from recently-used questions,
+  // drawn from independently so every player's question N always comes from
+  // tier N (no cross-tier repeats possible).
   const poolsByTier = {}
   for (const tier of DIFFICULTY_ORDER) {
-    let pool = shuffle(QUESTIONS.filter((q) => q.difficulty === tier).map((q) => q.id))
-    if (pool.length < needed) {
-      // Not enough unique questions in this tier for this many players —
-      // reshuffle and allow wraparound reuse rather than crash. Logged, not silent.
-      console.warn(
-        `[game] Only ${pool.length} '${tier}' questions for ${needed} players; reusing questions.`
-      )
-      const base = pool
-      while (pool.length < needed) {
-        pool = pool.concat(shuffle(base))
-      }
-    }
-    poolsByTier[tier] = pool
+    poolsByTier[tier] = buildTierDeck(tier, needed)
   }
 
+  const dealtByTier = Object.fromEntries(DIFFICULTY_ORDER.map((tier) => [tier, []]))
   room.assignedQuestions = {}
   for (const playerId of room.turnOrder) {
-    room.assignedQuestions[playerId] = DIFFICULTY_ORDER.map((tier) => poolsByTier[tier].splice(0, 1)[0])
+    room.assignedQuestions[playerId] = DIFFICULTY_ORDER.map((tier) => {
+      const questionId = poolsByTier[tier].splice(0, 1)[0]
+      dealtByTier[tier].push(questionId)
+      return questionId
+    })
+  }
+
+  for (const tier of DIFFICULTY_ORDER) {
+    markRecentlyUsed(tier, dealtByTier[tier])
   }
 
   room.currentTurnIndex = 0
